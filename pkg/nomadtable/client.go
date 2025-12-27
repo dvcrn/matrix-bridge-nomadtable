@@ -92,6 +92,28 @@ func (c *Client) QueryChannels(ctx context.Context, userID, connectionID string,
 	return &result, nil
 }
 
+type QueryChannelRequest struct {
+	Data     map[string]any `json:"data,omitempty"`
+	State    bool           `json:"state"`
+	Watch    bool           `json:"watch"`
+	Presence bool           `json:"presence"`
+}
+
+func (c *Client) QueryChannel(ctx context.Context, channelType, channelID, userID, connectionID string, request *QueryChannelRequest) (*QueryChannelResponse, error) {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	q.Set("connection_id", connectionID)
+
+	path := fmt.Sprintf("/channels/%s/%s/query", channelType, channelID)
+
+	var result QueryChannelResponse
+	if err := c.do(ctx, http.MethodPost, path, q, request, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, body any, result any) error {
 	u := c.BaseURL + path
 

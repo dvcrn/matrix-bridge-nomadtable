@@ -70,6 +70,18 @@ type QueryChannelsResponse struct {
 	Duration string         `json:"duration"`
 }
 
+type QueryChannelResponse struct {
+	Channel        *Channel         `json:"channel"`
+	Messages       []*Message       `json:"messages"`
+	PinnedMessages []*Message       `json:"pinned_messages"`
+	WatcherCount   int              `json:"watcher_count"`
+	Read           []*Read          `json:"read"`
+	Members        []*ChannelMember `json:"members"`
+	Membership     *ChannelMember   `json:"membership"`
+	Threads        []any            `json:"threads"`
+	Duration       string           `json:"duration"`
+}
+
 type ChannelState struct {
 	Channel        *Channel         `json:"channel"`
 	Messages       []*Message       `json:"messages"`
