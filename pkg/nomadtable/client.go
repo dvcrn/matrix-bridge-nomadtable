@@ -64,6 +64,35 @@ func (c *Client) GetApp(ctx context.Context, userID, connectionID string) (*GetA
 	return &result, nil
 }
 
+type QueryChannelsRequest struct {
+	FilterConditions map[string]any `json:"filter_conditions"`
+	Sort             []*SortOption  `json:"sort"`
+	State            bool           `json:"state"`
+	Watch            bool           `json:"watch"`
+	Presence         bool           `json:"presence"`
+	Limit            int            `json:"limit"`
+	Offset           int            `json:"offset"`
+	MessageLimit     int            `json:"message_limit"`
+}
+
+type SortOption struct {
+	Field     string `json:"field"`
+	Direction int    `json:"direction"`
+}
+
+func (c *Client) QueryChannels(ctx context.Context, userID, connectionID string, request *QueryChannelsRequest) (*QueryChannelsResponse, error) {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	q.Set("connection_id", connectionID)
+
+	var result QueryChannelsResponse
+	if err := c.do(ctx, http.MethodPost, "/channels", q, request, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, body any, result any) error {
 	u := c.BaseURL + path
 
