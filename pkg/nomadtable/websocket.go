@@ -308,6 +308,7 @@ func (c *Client) ConnectWebsocket(ctx context.Context, userID string, messages c
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				session.log("ws send health.check client_id=%s", session.ClientID())
 				if err := session.WriteMessage(websocket.TextMessage, payloadJSON); err != nil {
 					select {
 					case session.err <- fmt.Errorf("send health.check: %w", err):
