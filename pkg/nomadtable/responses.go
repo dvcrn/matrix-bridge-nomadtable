@@ -9,36 +9,36 @@ type UpdateUserResponse struct {
 }
 
 type UserResponse struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Language         string    `json:"language"`
-	Role             string    `json:"role"`
-	Teams            []any     `json:"teams"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Banned           bool      `json:"banned"`
-	Online           bool      `json:"online"`
-	LastActive       time.Time `json:"last_active"`
-	Devices          []*Device `json:"devices"`
-	Invisible        bool      `json:"invisible"`
-	Mutes            []any     `json:"mutes"`
-	ChannelMutes     []any     `json:"channel_mutes"`
-	UnreadCount      int       `json:"unread_count"`
-	TotalUnreadCount int       `json:"total_unread_count"`
-	UnreadChannels   int       `json:"unread_channels"`
-	UnreadThreads    int       `json:"unread_threads"`
-	ShadowBanned     bool      `json:"shadow_banned"`
-	BlockedUserIDs   []any     `json:"blocked_user_ids"`
-	Gender           string    `json:"gender"`
-	ProfileImage     string    `json:"profileImage"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Language         string     `json:"language"`
+	Role             string     `json:"role"`
+	Teams            []any      `json:"teams"`
+	CreatedAt        *time.Time `json:"created_at"`
+	UpdatedAt        *time.Time `json:"updated_at"`
+	Banned           bool       `json:"banned"`
+	Online           bool       `json:"online"`
+	LastActive       *time.Time `json:"last_active"`
+	Devices          []*Device  `json:"devices"`
+	Invisible        bool       `json:"invisible"`
+	Mutes            []any      `json:"mutes"`
+	ChannelMutes     []any      `json:"channel_mutes"`
+	UnreadCount      int        `json:"unread_count"`
+	TotalUnreadCount int        `json:"total_unread_count"`
+	UnreadChannels   int        `json:"unread_channels"`
+	UnreadThreads    int        `json:"unread_threads"`
+	ShadowBanned     bool       `json:"shadow_banned"`
+	BlockedUserIDs   []any      `json:"blocked_user_ids"`
+	Gender           string     `json:"gender"`
+	ProfileImage     string     `json:"profileImage"`
 }
 
 type Device struct {
-	PushProvider     string    `json:"push_provider"`
-	PushProviderName string    `json:"push_provider_name"`
-	ID               string    `json:"id"`
-	CreatedAt        time.Time `json:"created_at"`
-	UserID           string    `json:"user_id"`
+	PushProvider     string     `json:"push_provider"`
+	PushProviderName string     `json:"push_provider_name"`
+	ID               string     `json:"id"`
+	CreatedAt        *time.Time `json:"created_at"`
+	UserID           string     `json:"user_id"`
 }
 
 type GetAppResponse struct {
@@ -85,9 +85,9 @@ type Channel struct {
 	ID              string         `json:"id"`
 	Type            string         `json:"type"`
 	CID             string         `json:"cid"`
-	LastMessageAt   time.Time      `json:"last_message_at"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	LastMessageAt   *time.Time     `json:"last_message_at"`
+	CreatedAt       *time.Time     `json:"created_at"`
+	UpdatedAt       *time.Time     `json:"updated_at"`
 	CreatedBy       *UserResponse  `json:"created_by"`
 	Frozen          bool           `json:"frozen"`
 	Disabled        bool           `json:"disabled"`
@@ -102,8 +102,8 @@ type Channel struct {
 }
 
 type ChannelConfig struct {
-	CreatedAt                      time.Time  `json:"created_at"`
-	UpdatedAt                      time.Time  `json:"updated_at"`
+	CreatedAt                      *time.Time `json:"created_at"`
+	UpdatedAt                      *time.Time `json:"updated_at"`
 	Name                           string     `json:"name"`
 	TypingEvents                   bool       `json:"typing_events"`
 	ReadEvents                     bool       `json:"read_events"`
@@ -155,15 +155,15 @@ type Message struct {
 	ReplyCount           int                       `json:"reply_count"`
 	DeletedReplyCount    int                       `json:"deleted_reply_count"`
 	CID                  string                    `json:"cid"`
-	CreatedAt            time.Time                 `json:"created_at"`
-	UpdatedAt            time.Time                 `json:"updated_at"`
+	CreatedAt            *time.Time                `json:"created_at"`
+	UpdatedAt            *time.Time                `json:"updated_at"`
 	Shadowed             bool                      `json:"shadowed"`
 	MentionedUsers       []*UserResponse           `json:"mentioned_users"`
 	Silent               bool                      `json:"silent"`
 	Pinned               bool                      `json:"pinned"`
-	PinnedAt             *time.Time                `json:"pinned_at"`
+	PinnedAt             **time.Time               `json:"pinned_at"`
 	PinnedBy             *UserResponse             `json:"pinned_by"`
-	PinExpires           *time.Time                `json:"pin_expires"`
+	PinExpires           **time.Time               `json:"pin_expires"`
 	RestrictedVisibility []string                  `json:"restricted_visibility"`
 	QuotedMessageID      string                    `json:"quoted_message_id,omitempty"`
 	QuotedMessage        *Message                  `json:"quoted_message,omitempty"`
@@ -195,20 +195,20 @@ type Reaction struct {
 	User      *UserResponse `json:"user"`
 	Type      string        `json:"type"`
 	Score     int           `json:"score"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	CreatedAt *time.Time    `json:"created_at"`
+	UpdatedAt *time.Time    `json:"updated_at"`
 }
 
 type ReactionGroup struct {
-	Count           int       `json:"count"`
-	SumScores       int       `json:"sum_scores"`
-	FirstReactionAt time.Time `json:"first_reaction_at"`
-	LastReactionAt  time.Time `json:"last_reaction_at"`
+	Count           int        `json:"count"`
+	SumScores       int        `json:"sum_scores"`
+	FirstReactionAt *time.Time `json:"first_reaction_at"`
+	LastReactionAt  *time.Time `json:"last_reaction_at"`
 }
 
 type Read struct {
 	User              *UserResponse `json:"user"`
-	LastRead          time.Time     `json:"last_read"`
+	LastRead          *time.Time    `json:"last_read"`
 	UnreadMessages    int           `json:"unread_messages"`
 	LastReadMessageID string        `json:"last_read_message_id"`
 }
@@ -217,8 +217,8 @@ type ChannelMember struct {
 	UserID             string        `json:"user_id,omitempty"`
 	User               *UserResponse `json:"user"`
 	Status             string        `json:"status"`
-	CreatedAt          time.Time     `json:"created_at"`
-	UpdatedAt          time.Time     `json:"updated_at"`
+	CreatedAt          *time.Time    `json:"created_at"`
+	UpdatedAt          *time.Time    `json:"updated_at"`
 	Banned             bool          `json:"banned"`
 	ShadowBanned       bool          `json:"shadow_banned"`
 	Role               string        `json:"role,omitempty"`
