@@ -124,6 +124,17 @@ func (nc *NomadtableClient) FetchMessages(ctx context.Context, fetchParams bridg
 			content.FormattedBody = formatted
 		}
 
+		var replyTo *networkid.MessageOptionalPartID
+		quotedID := m.QuotedMessageID
+		if quotedID == "" && m.QuotedMessage != nil {
+			quotedID = m.QuotedMessage.ID
+		}
+		if quotedID != "" {
+			replyTo = &networkid.MessageOptionalPartID{
+				MessageID: networkid.MessageID(quotedID),
+			}
+		}
+
 		out = append(out, &bridgev2.BackfillMessage{
 			ID:        networkid.MessageID(m.ID),
 			Timestamp: ts,
@@ -132,6 +143,7 @@ func (nc *NomadtableClient) FetchMessages(ctx context.Context, fetchParams bridg
 				IsFromMe: nc.IsThisUser(ctx, networkid.UserID(senderID)),
 			},
 			ConvertedMessage: &bridgev2.ConvertedMessage{
+				ReplyTo: replyTo,
 				Parts: []*bridgev2.ConvertedMessagePart{{
 					Type:    event.EventMessage,
 					Content: content,

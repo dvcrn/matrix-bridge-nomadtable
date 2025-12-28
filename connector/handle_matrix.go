@@ -112,6 +112,51 @@ func (nc *NomadtableClient) HandleMatrixMessage(ctx context.Context, msg *bridge
 	return &bridgev2.MatrixMessageResponse{DB: &database.Message{ID: networkid.MessageID(remoteID)}}, nil
 }
 
+// HandleMatrixReadReceipt updates read status in Nomadtable when Matrix receipts arrive.
+func (nc *NomadtableClient) HandleMatrixReadReceipt(ctx context.Context, receipt *bridgev2.MatrixReadReceipt) error {
+	if receipt == nil || receipt.Portal == nil {
+		return nil
+	}
+	if receipt.ReadUpTo.IsZero() || !receipt.ReadUpTo.After(receipt.LastRead) {
+		return nil
+	}
+
+	log := nc.log.With().
+		Str("portal_id", string(receipt.Portal.ID)).
+		Str("event_id", string(receipt.EventID)).
+		Logger()
+	ctx = log.WithContext(ctx)
+
+	if nc.session == nil {
+		log.Warn().Msg("Ignoring read receipt without websocket session")
+		return nil
+	}
+	connectionID := nc.session.ConnectionID()
+	if connectionID == "" {
+		log.Warn().Msg("Ignoring read receipt without connection_id")
+		return nil
+	}
+
+	channelType, channelID, err := parsePortalKeyToChannel(receipt.Portal.PortalKey.ID)
+	if err != nil {
+		return err
+	}
+
+	log.Debug().
+		Str("channel_type", channelType).
+		Str("channel_id", channelID).
+		Str("connection_id", connectionID).
+		Str("user_id", nc.meta.UserID).
+		Msg("Sending MarkRead to Nomadtable")
+
+	if _, err := nc.client.MarkRead(ctx, channelType, channelID, nc.meta.UserID, connectionID); err != nil {
+		log.Err(err).Msg("MarkRead failed")
+		return err
+	}
+
+	return nil
+}
+
 // GetUserInfo resolves user info from cached data or channel state.
 func (nc *NomadtableClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) {
 	if ghost == nil {

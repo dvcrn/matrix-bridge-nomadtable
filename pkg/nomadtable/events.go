@@ -63,6 +63,23 @@ type NotificationMessageNew struct {
 	UnreadChannels     int        `json:"unread_channels"`
 }
 
+// NotificationThreadMessageNew represents a new thread message notification event.
+type NotificationThreadMessageNew struct {
+	Type                 string     `json:"type"`
+	CreatedAt            *time.Time `json:"created_at"`
+	CID                  string     `json:"cid"`
+	ChannelMemberCount   int        `json:"channel_member_count"`
+	ChannelType          string     `json:"channel_type"`
+	ChannelID            string     `json:"channel_id"`
+	Channel              Channel    `json:"channel"`
+	ThreadID             string     `json:"thread_id"`
+	MessageID            string     `json:"message_id"`
+	Message              Message    `json:"message"`
+	WatcherCount         int        `json:"watcher_count"`
+	UnreadThreads        int        `json:"unread_threads"`
+	UnreadThreadMessages int        `json:"unread_thread_messages"`
+}
+
 // NotificationMarkRead represents a mark read notification event
 type NotificationMarkRead struct {
 	Type                 string      `json:"type"`

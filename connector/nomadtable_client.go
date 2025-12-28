@@ -364,6 +364,12 @@ func (nc *NomadtableClient) handleWebsocketEvent(ctx context.Context, data []byt
 			return fmt.Errorf("unmarshal message_new: %w", err)
 		}
 		return nc.handleRemoteMessage(ctx, &ev)
+	case "notification.thread_message_new":
+		var ev nomadtable.NotificationThreadMessageNew
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal thread_message_new: %w", err)
+		}
+		return nc.handleThreadMessage(ctx, &ev)
 	case "message.read":
 		var ev nomadtable.MessageReadEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -662,6 +668,14 @@ func (nc *NomadtableClient) handleAddedToChannel(ctx context.Context, ev *nomadt
 		ts = *ev.CreatedAt
 	}
 
+	content := &event.MessageEventContent{
+		MsgType: event.MsgNotice,
+		Body:    "You have joined this channel",
+	}
+	if _, err := nc.bridge.Bot.SendMessage(ctx, portal.MXID, event.EventMessage, &event.Content{Parsed: content}, nil); err != nil {
+		nc.log.Err(err).Str("room_id", portal.MXID.String()).Msg("Failed to send join notice")
+	}
+
 	if err := nc.queueRoomWritable(portal, ts); err != nil {
 		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to queue room unlock")
 	}
@@ -850,6 +864,26 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 		Msg("Queued ChatResync for incoming message")
 
 	return nil
+}
+
+func (nc *NomadtableClient) handleThreadMessage(ctx context.Context, ev *nomadtable.NotificationThreadMessageNew) error {
+	if ev == nil {
+		return nil
+	}
+
+	msg := &nomadtable.NotificationMessageNew{
+		Type:               ev.Type,
+		CreatedAt:          ev.CreatedAt,
+		CID:                ev.CID,
+		ChannelMemberCount: ev.ChannelMemberCount,
+		ChannelType:        ev.ChannelType,
+		ChannelID:          ev.ChannelID,
+		Channel:            ev.Channel,
+		MessageID:          ev.MessageID,
+		Message:            ev.Message,
+		WatcherCount:       ev.WatcherCount,
+	}
+	return nc.handleRemoteMessage(ctx, msg)
 }
 
 func (nc *NomadtableClient) loadRooms(ctx context.Context, connectionID string) {
