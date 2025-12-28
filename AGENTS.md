@@ -19,10 +19,19 @@ This file serves as a persistent memory and rulebook for AI agents working on th
 ### Matrix Bridge Structure
 
 - `main.go` is the entry point; it wires config, logging, and bridge lifecycle (`mxmain`).
-- `network_connector.go` implements the core `bridgev2.NetworkConnector` logic.
-- `login.go` defines login flows (`bridgev2.LoginProcess`).
-- `network_client.go` is the per-user remote network client.
+- `connector/my_connector.go` implements the core `bridgev2.NetworkConnector` logic.
+- `connector/login.go` defines login flows (`bridgev2.LoginProcess`).
+- `connector/network_client.go` is the per-user remote network client.
 - `go.mod`/`go.sum` manage dependencies; no dedicated `tests/` directory yet.
+
+### BridgeV2 Lifecycle & Backfill Notes
+
+- `LoadUserLogin` should create your adapter, assign `userLogin.Client`, and avoid blocking network calls; connect in `NetworkAPI.Connect`.
+- Create new rooms by queuing `simplevent.ChatResync` with `EventMeta.CreatePortal = true` and `ChatInfo = nil`; the framework will call `GetChatInfo`.
+- `GetChatInfo` should return the full desired room state (name, topic, DM type, members, power levels, avatar).
+- Use `simplevent.ChatInfoChange` for state-only updates (e.g., lock rooms on unmatch).
+- Implement `FetchMessages` (via `BackfillingNetworkAPI`) to backfill history; lock portals, convert remote messages to `BackfillMessage`, and return `HasMore`.
+- Send bridge state updates with `userLogin.BridgeState.Send(status.BridgeState{StateEvent: ...})` for connect/backfill/errors.
 
 ## Nomadtable Usage Recipes
 

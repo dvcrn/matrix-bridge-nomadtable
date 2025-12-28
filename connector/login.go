@@ -1,20 +1,16 @@
-package main
+package connector
 
 import (
 	"context"
 	"fmt"
 	"strings"
 
-	// Added time for createWelcomeRoomAndSendIntro call
 	"github.com/google/uuid"
-	"github.com/rs/zerolog" // Added ptr for createWelcomeRoomAndSendIntro call
-	// Added mautrix for createWelcomeRoomAndSendIntro call
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/status"
-	// Added event for createWelcomeRoomAndSendIntro call
-	// Added id for createWelcomeRoomAndSendIntro call
 )
 
 // Login Flow/Step IDs - Copied from network_connector.go as they are used here
@@ -27,7 +23,7 @@ const (
 // SimpleLogin represents an ongoing username/password login attempt.
 type SimpleLogin struct {
 	User *bridgev2.User
-	Main *SimpleNetworkConnector // Needs access to the connector for LoadUserLogin and createWelcomeRoom...
+	Main *NomadtableConnector // Needs access to the connector for LoadUserLogin and createWelcomeRoom...
 	Log  zerolog.Logger
 }
 
