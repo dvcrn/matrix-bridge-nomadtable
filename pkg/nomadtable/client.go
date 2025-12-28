@@ -92,6 +92,36 @@ func (c *Client) QueryChannels(ctx context.Context, userID, connectionID string,
 	return &result, nil
 }
 
+type QueryMembersRequest struct {
+	Type             string         `json:"type"`
+	ID               string         `json:"id"`
+	Sort             []*SortOption  `json:"sort"`
+	FilterConditions map[string]any `json:"filter_conditions"`
+	Limit            int            `json:"limit"`
+	Offset           int            `json:"offset"`
+}
+
+func (c *Client) QueryMembers(ctx context.Context, userID, connectionID string, request *QueryMembersRequest) (*QueryMembersResponse, error) {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	q.Set("connection_id", connectionID)
+
+	if request != nil {
+		payload, err := json.Marshal(request)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		q.Set("payload", string(payload))
+	}
+
+	var result QueryMembersResponse
+	if err := c.do(ctx, http.MethodGet, "/members", q, nil, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 type QueryChannelRequest struct {
 	Data     map[string]any `json:"data,omitempty"`
 	State    bool           `json:"state"`

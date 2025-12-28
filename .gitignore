@@ -6,3 +6,5 @@ config.yaml
 simple-bridge.db
 logs
 *.db
+*.db-shm
+*.db-wal

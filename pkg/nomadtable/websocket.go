@@ -328,6 +328,9 @@ func (c *Client) ConnectWebsocket(ctx context.Context, userID string, messages c
 		for {
 			msgType, data, err := session.conn.ReadMessage()
 			if err == nil {
+				// Some servers/proxies don't reliably send websocket pong frames.
+				// Refresh the read deadline on any incoming message.
+				_ = session.conn.SetReadDeadline(time.Now().Add(resolved.PongWait))
 				session.log("ws recv type=%d bytes=%d", msgType, len(data))
 			}
 			if err != nil {
