@@ -359,19 +359,55 @@ func (nc *NomadtableClient) handleWebsocketEvent(ctx context.Context, data []byt
 		return nc.handleRemoteMessage(ctx, &ev)
 	case "notification.added_to_channel":
 		nc.log.Info().Str("cid", base.CID).Msg("Added to channel, triggering portal resync")
-		if nc.session == nil {
-			nc.log.Error().Msg("Resync skipped: no websocket session")
-			return nil
-		}
-		connectionID := nc.session.ConnectionID()
-		if connectionID == "" {
-			nc.log.Error().Msg("Resync skipped: missing connection_id")
-			return nil
-		}
-		go nc.loadRooms(ctx, connectionID)
+		nc.triggerResync(ctx, "added_to_channel")
 		return nil
 	default:
 		return nil
+	}
+}
+
+func (nc *NomadtableClient) triggerResync(ctx context.Context, reason string) {
+	log := nc.log.With().Str("reason", reason).Logger()
+	if nc.session != nil {
+		if connectionID := nc.session.ConnectionID(); connectionID != "" {
+			log.Info().Msg("Triggering portal resync")
+			go nc.loadRooms(ctx, connectionID)
+			return
+		}
+	}
+
+	log.Info().Msg("Resync deferred, waiting for websocket connection_id")
+	go nc.waitForResync(ctx, reason)
+}
+
+func (nc *NomadtableClient) waitForResync(ctx context.Context, reason string) {
+	log := nc.log.With().Str("reason", reason).Logger()
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if waitCtx.Err() != nil {
+			log.Warn().Msg("Resync timed out waiting for connection_id")
+			return
+		}
+
+		if nc.session != nil {
+			if connectionID := nc.session.ConnectionID(); connectionID != "" {
+				log.Info().Msg("Triggering deferred portal resync")
+				go nc.loadRooms(ctx, connectionID)
+				return
+			}
+		}
+
+		select {
+		case <-waitCtx.Done():
+			log.Warn().Msg("Resync timed out waiting for connection_id")
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

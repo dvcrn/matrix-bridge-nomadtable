@@ -108,6 +108,12 @@ func (sl *SimpleLogin) SubmitUserInput(ctx context.Context, input map[string]str
 	if err = sl.Main.LoadUserLogin(ctx, ul); err != nil {
 		sl.Log.Err(err).Msg("Failed to load user login after creation")
 	}
+	if ul.Client != nil {
+		ul.Client.Connect(ul.Log.WithContext(ctx))
+	}
+	if client, ok := ul.Client.(*NomadtableClient); ok {
+		client.triggerResync(context.Background(), "login")
+	}
 
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
