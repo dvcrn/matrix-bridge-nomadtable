@@ -97,9 +97,165 @@ func (nc *NomadtableClient) HandleMatrixMessage(ctx context.Context, msg *bridge
 	return &bridgev2.MatrixMessageResponse{DB: &database.Message{ID: networkid.MessageID(remoteID)}}, nil
 }
 
-// GetUserInfo is not implemented for this simple connector.
+// GetUserInfo resolves user info from cached data or channel state.
 func (nc *NomadtableClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) {
-	return nil, fmt.Errorf("user info not available")
+	if ghost == nil {
+		return nil, fmt.Errorf("ghost is nil")
+	}
+
+	log := nc.log.With().Str("ghost_id", string(ghost.ID)).Logger()
+	ctx = log.WithContext(ctx)
+
+	userID := string(ghost.ID)
+	if cached := nc.getCachedUser(userID); cached != nil {
+		log.Info().Msg("User cache hit")
+		name := cached.Name
+		if name == "" {
+			name = cached.ID
+		}
+		info := &bridgev2.UserInfo{Name: ptr.Ptr(name)}
+		if cached.ProfileImage != "" {
+			info.Avatar = nc.getAvatar(cached.ProfileImage)
+		}
+		return info, nil
+	}
+
+	log.Info().Msg("User cache miss, querying channels")
+
+	if nc.session == nil {
+		return nil, fmt.Errorf("no websocket session")
+	}
+	connectionID := nc.session.ConnectionID()
+	if connectionID == "" {
+		return nil, fmt.Errorf("missing connection_id")
+	}
+
+	filter := map[string]any{
+		"members": map[string]any{
+			"$in": []string{nc.meta.UserID},
+		},
+		"$or": []any{
+			map[string]any{
+				"plan_id": map[string]any{"$exists": true},
+			},
+			map[string]any{
+				"$and": []any{
+					map[string]any{"member_count": 2},
+					map[string]any{"last_message_at": map[string]any{"$exists": true}},
+				},
+			},
+			map[string]any{
+				"member_count": map[string]any{"$gt": 2},
+			},
+		},
+	}
+
+	matchUser := func(user *nomadtable.UserResponse) *nomadtable.UserResponse {
+		if user == nil {
+			return nil
+		}
+		nc.cacheUser(user)
+		if user.ID == userID {
+			return user
+		}
+		return nil
+	}
+
+	const pageLimit = 100
+	offset := 0
+	for {
+		resp, err := nc.client.QueryChannels(ctx, nc.meta.UserID, connectionID, &nomadtable.QueryChannelsRequest{
+			FilterConditions: filter,
+			Sort: []*nomadtable.SortOption{
+				{Field: "pinned_at", Direction: -1},
+				{Field: "updated_at", Direction: -1},
+			},
+			State:        true,
+			Watch:        false,
+			Presence:     false,
+			Limit:        pageLimit,
+			Offset:       offset,
+			MessageLimit: 50,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("QueryChannels failed: %w", err)
+		}
+
+		for _, state := range resp.Channels {
+			if state.Channel != nil {
+				if user := matchUser(state.Channel.CreatedBy); user != nil {
+					log.Info().Msg("Resolved user info from channel creator")
+					break
+				}
+			}
+			if state.Membership != nil {
+				if user := matchUser(state.Membership.User); user != nil {
+					log.Info().Msg("Resolved user info from channel membership")
+					break
+				}
+			}
+			for _, member := range state.Members {
+				if member != nil {
+					if user := matchUser(member.User); user != nil {
+						log.Info().Msg("Resolved user info from channel members")
+						break
+					}
+				}
+			}
+			for _, read := range state.Read {
+				if read != nil {
+					if user := matchUser(read.User); user != nil {
+						log.Info().Msg("Resolved user info from channel read state")
+						break
+					}
+				}
+			}
+			for _, msg := range state.Messages {
+				if msg != nil {
+					if user := matchUser(msg.User); user != nil {
+						log.Info().Msg("Resolved user info from channel messages")
+						break
+					}
+					if user := matchUser(msg.PinnedBy); user != nil {
+						log.Info().Msg("Resolved user info from pinned message")
+						break
+					}
+				}
+			}
+			for _, msg := range state.PinnedMessages {
+				if msg != nil {
+					if user := matchUser(msg.User); user != nil {
+						log.Info().Msg("Resolved user info from pinned messages")
+						break
+					}
+					if user := matchUser(msg.PinnedBy); user != nil {
+						log.Info().Msg("Resolved user info from pinned message")
+						break
+					}
+				}
+			}
+		}
+
+		if cached := nc.getCachedUser(userID); cached != nil {
+			log.Info().Msg("User cache filled from channel scan")
+			name := cached.Name
+			if name == "" {
+				name = cached.ID
+			}
+			info := &bridgev2.UserInfo{Name: ptr.Ptr(name)}
+			if cached.ProfileImage != "" {
+				info.Avatar = nc.getAvatar(cached.ProfileImage)
+			}
+			return info, nil
+		}
+
+		if len(resp.Channels) < pageLimit {
+			break
+		}
+		offset += pageLimit
+	}
+
+	return nil, fmt.Errorf("user info not found in channel state")
 }
 
 // GetChatInfo returns the full desired Matrix room state for the portal.
@@ -146,6 +302,33 @@ func (nc *NomadtableClient) GetChatInfo(ctx context.Context, portal *bridgev2.Po
 	if resp.Channel == nil {
 		log.Error().Msg("QueryChannel returned nil channel")
 		return nil, fmt.Errorf("QueryChannel returned nil channel")
+	}
+
+	nc.cacheUser(resp.Channel.CreatedBy)
+	if resp.Membership != nil {
+		nc.cacheUser(resp.Membership.User)
+	}
+	for _, member := range resp.Members {
+		if member != nil {
+			nc.cacheUser(member.User)
+		}
+	}
+	for _, read := range resp.Read {
+		if read != nil {
+			nc.cacheUser(read.User)
+		}
+	}
+	for _, msg := range resp.Messages {
+		if msg != nil {
+			nc.cacheUser(msg.User)
+			nc.cacheUser(msg.PinnedBy)
+		}
+	}
+	for _, msg := range resp.PinnedMessages {
+		if msg != nil {
+			nc.cacheUser(msg.User)
+			nc.cacheUser(msg.PinnedBy)
+		}
 	}
 
 	log.Info().

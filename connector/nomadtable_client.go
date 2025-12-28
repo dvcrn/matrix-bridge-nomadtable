@@ -35,8 +35,9 @@ type NomadtableClient struct {
 	wsCancel context.CancelFunc
 	session  *nomadtable.WebsocketSession
 
-	avatarCacheMu sync.Mutex
-	avatarCache   map[string]*bridgev2.Avatar
+	cacheMu     sync.Mutex
+	userCache   map[string]*nomadtable.UserResponse
+	avatarCache map[string]*bridgev2.Avatar
 }
 
 func (nc *NomadtableClient) getAvatar(url string) *bridgev2.Avatar {
@@ -44,15 +45,15 @@ func (nc *NomadtableClient) getAvatar(url string) *bridgev2.Avatar {
 		return nil
 	}
 
-	nc.avatarCacheMu.Lock()
+	nc.cacheMu.Lock()
 	if nc.avatarCache == nil {
 		nc.avatarCache = make(map[string]*bridgev2.Avatar)
 	}
 	if cached, ok := nc.avatarCache[url]; ok {
-		nc.avatarCacheMu.Unlock()
+		nc.cacheMu.Unlock()
 		return cached
 	}
-	nc.avatarCacheMu.Unlock()
+	nc.cacheMu.Unlock()
 
 	log := nc.log.With().Str("avatar_url", url).Logger()
 	avatar := &bridgev2.Avatar{
@@ -79,11 +80,60 @@ func (nc *NomadtableClient) getAvatar(url string) *bridgev2.Avatar {
 		},
 	}
 
-	nc.avatarCacheMu.Lock()
+	nc.cacheMu.Lock()
 	nc.avatarCache[url] = avatar
-	nc.avatarCacheMu.Unlock()
+	nc.cacheMu.Unlock()
 
 	return avatar
+}
+
+func (nc *NomadtableClient) cacheUser(user *nomadtable.UserResponse) {
+	if user == nil || user.ID == "" {
+		return
+	}
+
+	nc.cacheMu.Lock()
+	if nc.userCache == nil {
+		nc.userCache = make(map[string]*nomadtable.UserResponse)
+	}
+	existing, ok := nc.userCache[user.ID]
+	if !ok {
+		clone := *user
+		nc.userCache[user.ID] = &clone
+		nc.cacheMu.Unlock()
+		return
+	}
+	if user.Name != "" {
+		existing.Name = user.Name
+	}
+	if user.ProfileImage != "" {
+		existing.ProfileImage = user.ProfileImage
+	}
+	if user.Gender != "" {
+		existing.Gender = user.Gender
+	}
+	if user.UpdatedAt != nil {
+		existing.UpdatedAt = user.UpdatedAt
+	}
+	nc.cacheMu.Unlock()
+}
+
+func (nc *NomadtableClient) getCachedUser(userID string) *nomadtable.UserResponse {
+	if userID == "" {
+		return nil
+	}
+
+	nc.cacheMu.Lock()
+	defer nc.cacheMu.Unlock()
+	if nc.userCache == nil {
+		return nil
+	}
+	cached, ok := nc.userCache[userID]
+	if !ok || cached == nil {
+		return nil
+	}
+	clone := *cached
+	return &clone
 }
 
 // Connect starts the websocket connection.
@@ -267,6 +317,19 @@ func (nc *NomadtableClient) handleWebsocketEvent(ctx context.Context, data []byt
 			return fmt.Errorf("unmarshal message_new: %w", err)
 		}
 		return nc.handleRemoteMessage(ctx, &ev)
+	case "notification.added_to_channel":
+		nc.log.Info().Str("cid", base.CID).Msg("Added to channel, triggering portal resync")
+		if nc.session == nil {
+			nc.log.Error().Msg("Resync skipped: no websocket session")
+			return nil
+		}
+		connectionID := nc.session.ConnectionID()
+		if connectionID == "" {
+			nc.log.Error().Msg("Resync skipped: missing connection_id")
+			return nil
+		}
+		go nc.loadRooms(ctx, connectionID)
+		return nil
 	default:
 		return nil
 	}
@@ -276,6 +339,8 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 	if ev == nil {
 		return nil
 	}
+
+	nc.cacheUser(ev.Message.User)
 
 	cid := ev.CID
 	if cid == "" {
@@ -332,77 +397,31 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 		Str("text", body).
 		Msg("Upstream message event received")
 
-	// Ensure the portal exists, and if it doesn't yet have a Matrix room,
-	// queue a ChatResync first so the room is created with a name/topic.
+	createPortal := true
 	portal, err := nc.bridge.GetPortalByKey(ctx, portalKey)
 	if err != nil {
 		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to get/provision portal for incoming message")
-	} else if portal.MXID == "" {
-		name := ev.Channel.Name
-		if name == "" {
-			name = cid
-		}
-
-		topic := fmt.Sprintf("Nomadtable channel %s", cid)
-		if ev.Channel.PlanID != "" {
-			topic = fmt.Sprintf("plan_id=%s cid=%s", ev.Channel.PlanID, cid)
-		}
-
-		chatInfo := &bridgev2.ChatInfo{
-			Name:   ptr.Ptr(name),
-			Topic:  ptr.Ptr(topic),
-			Avatar: nc.getAvatar(ev.Channel.Image),
-		}
-
-		memberCount := ev.ChannelMemberCount
-		if memberCount == 0 {
-			memberCount = ev.Channel.MemberCount
-		}
-		if memberCount == 2 {
-			rt := database.RoomTypeDM
-			chatInfo.Type = &rt
-		} else if memberCount > 2 {
-			rt := database.RoomTypeGroupDM
-			chatInfo.Type = &rt
-		}
-
-		nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatResync{
-			EventMeta: simplevent.EventMeta{
-				Type:         bridgev2.RemoteEventChatResync,
-				PortalKey:    portalKey,
-				CreatePortal: true,
-				Timestamp:    ts,
-			},
-			ChatInfo:        chatInfo,
-			LatestMessageTS: ts,
-		})
-
-		nc.log.Info().
-			Str("portal_key", string(portalKey.ID)).
-			Str("name", name).
-			Msg("Queued ChatResync to create portal room")
+	} else {
+		createPortal = portal.MXID == ""
 	}
 
-	remoteMsg := &NomadtableRemoteMessage{
+	// Always resync on incoming messages to ensure we pick up any missed history.
+	nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatResync{
 		EventMeta: simplevent.EventMeta{
-			Type:         bridgev2.RemoteEventMessage,
+			Type:         bridgev2.RemoteEventChatResync,
 			PortalKey:    portalKey,
-			CreatePortal: true,
+			CreatePortal: createPortal,
 			Timestamp:    ts,
-			Sender: bridgev2.EventSender{
-				Sender:   networkid.UserID(senderID),
-				IsFromMe: isFromMe,
-			},
 		},
-		Msg:       &ev.Message,
-		MessageID: networkid.MessageID(msgID),
-	}
+		ChatInfo:        nil,
+		LatestMessageTS: ts,
+	})
 
-	nc.bridge.QueueRemoteEvent(nc.login, remoteMsg)
 	nc.log.Info().
 		Str("portal_key", string(portalKey.ID)).
 		Str("message_id", msgID).
-		Msg("Queued incoming Nomadtable message")
+		Bool("create_portal", createPortal).
+		Msg("Queued ChatResync for incoming message")
 
 	return nil
 }
@@ -461,6 +480,35 @@ func (nc *NomadtableClient) loadRooms(ctx context.Context, connectionID string) 
 	nc.log.Info().Int("channels", len(resp.Channels)).Msg("Received Nomadtable channels")
 
 	for _, state := range resp.Channels {
+		if state.Channel != nil {
+			nc.cacheUser(state.Channel.CreatedBy)
+		}
+		if state.Membership != nil {
+			nc.cacheUser(state.Membership.User)
+		}
+		for _, member := range state.Members {
+			if member != nil {
+				nc.cacheUser(member.User)
+			}
+		}
+		for _, read := range state.Read {
+			if read != nil {
+				nc.cacheUser(read.User)
+			}
+		}
+		for _, msg := range state.Messages {
+			if msg != nil {
+				nc.cacheUser(msg.User)
+				nc.cacheUser(msg.PinnedBy)
+			}
+		}
+		for _, msg := range state.PinnedMessages {
+			if msg != nil {
+				nc.cacheUser(msg.User)
+				nc.cacheUser(msg.PinnedBy)
+			}
+		}
+
 		ch := state.Channel
 		if ch == nil {
 			continue
