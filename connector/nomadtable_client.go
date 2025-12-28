@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"sync"
 	"time"
 
 	"github.com/dvcrn/matrix-bridge-nomadtable/pkg/nomadtable"
