@@ -223,6 +223,56 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 		Str("text", body).
 		Msg("Upstream message event received")
 
+	// Ensure the portal exists, and if it doesn't yet have a Matrix room,
+	// queue a ChatResync first so the room is created with a name/topic.
+	portal, err := nc.bridge.GetPortalByKey(ctx, portalKey)
+	if err != nil {
+		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to get/provision portal for incoming message")
+	} else if portal.MXID == "" {
+		name := ev.Channel.Name
+		if name == "" {
+			name = cid
+		}
+
+		topic := fmt.Sprintf("Nomadtable channel %s", cid)
+		if ev.Channel.PlanID != "" {
+			topic = fmt.Sprintf("plan_id=%s cid=%s", ev.Channel.PlanID, cid)
+		}
+
+		chatInfo := &bridgev2.ChatInfo{
+			Name:  ptr.Ptr(name),
+			Topic: ptr.Ptr(topic),
+		}
+
+		memberCount := ev.ChannelMemberCount
+		if memberCount == 0 {
+			memberCount = ev.Channel.MemberCount
+		}
+		if memberCount == 2 {
+			rt := database.RoomTypeDM
+			chatInfo.Type = &rt
+		} else if memberCount > 2 {
+			rt := database.RoomTypeGroupDM
+			chatInfo.Type = &rt
+		}
+
+		nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatResync{
+			EventMeta: simplevent.EventMeta{
+				Type:         bridgev2.RemoteEventChatResync,
+				PortalKey:    portalKey,
+				CreatePortal: true,
+				Timestamp:    ts,
+			},
+			ChatInfo:        chatInfo,
+			LatestMessageTS: ts,
+		})
+
+		nc.log.Info().
+			Str("portal_key", string(portalKey.ID)).
+			Str("name", name).
+			Msg("Queued ChatResync to create portal room")
+	}
+
 	remoteMsg := &NomadtableRemoteMessage{
 		EventMeta: simplevent.EventMeta{
 			Type:         bridgev2.RemoteEventMessage,
