@@ -40,75 +40,10 @@ func (nc *NomadtableClient) Connect(ctx context.Context) {
 	wsCtx, cancel := context.WithCancel(context.Background())
 	nc.wsCancel = cancel
 
-	messages := make(chan nomadtable.WebsocketMessage, 256)
-	session, err := nc.client.ConnectWebsocket(wsCtx, nc.meta.UserID, messages, &nomadtable.WebsocketOptions{
-		XStreamClient:    "stream-chat-go-client",
-		HandshakeTimeout: 30 * time.Second,
-		PongWait:         60 * time.Second,
-		PingInterval:     25 * time.Second,
-		WriteWait:        10 * time.Second,
-		Logger: func(format string, args ...any) {
-			nc.log.Debug().Msgf(format, args...)
-		},
-	})
-	if err != nil {
-		nc.log.Err(err).Msg("Failed to connect websocket")
-		cancel()
-		return
-	}
-
-	nc.session = session
-
-	waitCtx, waitCancel := context.WithTimeout(wsCtx, 15*time.Second)
-	defer waitCancel()
-
-	nc.log.Info().Str("user_id", nc.meta.UserID).Msg("Waiting for websocket connection_id")
-	connectionID, err := waitForConnectionID(waitCtx, session, messages)
-	if err != nil {
-		nc.log.Err(err).Msg("Websocket connected but did not yield connection_id")
-		_ = session.Close()
-		cancel()
-		return
-	}
-	if connectionID == "" {
-		nc.log.Error().Msg("Websocket yielded empty connection_id")
-		_ = session.Close()
-		cancel()
-		return
-	}
-	nc.log.Info().Str("connection_id", connectionID).Msg("Websocket connection_id ready")
-
 	go func() {
 		defer cancel()
-		for {
-			select {
-			case <-wsCtx.Done():
-				_ = session.Close()
-				return
-			case err := <-session.Err():
-				nc.log.Err(err).Msg("Websocket error")
-				return
-			case <-session.Done():
-				nc.log.Info().Msg("Websocket session done")
-				return
-			case msg := <-messages:
-				nc.log.Debug().
-					Time("received_at", msg.ReceivedAt).
-					Int("type", msg.Type).
-					Int("size", len(msg.Data)).
-					Msg("Received websocket message")
-
-				if msg.Type != 1 {
-					continue
-				}
-				if err := nc.handleWebsocketEvent(ctx, msg.Data); err != nil {
-					nc.log.Err(err).Msg("Failed to handle websocket event")
-				}
-			}
-		}
+		nc.runWebsocketLoop(ctx, wsCtx)
 	}()
-
-	nc.loadRooms(ctx)
 }
 
 func waitForConnectionID(ctx context.Context, session *nomadtable.WebsocketSession, messages <-chan nomadtable.WebsocketMessage) (string, error) {
@@ -127,6 +62,127 @@ func waitForConnectionID(ctx context.Context, session *nomadtable.WebsocketSessi
 		case <-messages:
 			// session.ConnectionID() is populated by the websocket reader.
 		}
+	}
+}
+
+func (nc *NomadtableClient) runWebsocketLoop(ctx context.Context, wsCtx context.Context) {
+	const reconnectDelay = 10 * time.Second
+	firstConnect := true
+
+	for {
+		if wsCtx.Err() != nil {
+			return
+		}
+
+		session, messages, connectionID, err := nc.connectWebsocket(wsCtx)
+		if err != nil {
+			nc.log.Err(err).Msg("Failed to connect websocket")
+			if !sleepWithContext(wsCtx, reconnectDelay) {
+				return
+			}
+			continue
+		}
+
+		nc.session = session
+
+		if firstConnect {
+			nc.log.Info().Str("connection_id", connectionID).Msg("Websocket connection_id ready")
+			firstConnect = false
+		} else {
+			nc.log.Info().Str("connection_id", connectionID).Msg("Websocket reconnected")
+			nc.log.Info().Msg("Triggering ChatResync after websocket reconnect")
+		}
+
+		go nc.loadRooms(ctx, connectionID)
+
+		nc.handleWebsocketMessages(ctx, wsCtx, session, messages)
+		_ = session.Close()
+
+		if wsCtx.Err() != nil {
+			return
+		}
+
+		nc.log.Info().
+			Int("backoff_seconds", int(reconnectDelay.Seconds())).
+			Msg("Websocket disconnected, reconnecting...")
+
+		if !sleepWithContext(wsCtx, reconnectDelay) {
+			return
+		}
+	}
+}
+
+func (nc *NomadtableClient) connectWebsocket(ctx context.Context) (*nomadtable.WebsocketSession, <-chan nomadtable.WebsocketMessage, string, error) {
+	messages := make(chan nomadtable.WebsocketMessage, 256)
+	session, err := nc.client.ConnectWebsocket(ctx, nc.meta.UserID, messages, &nomadtable.WebsocketOptions{
+		XStreamClient:    "stream-chat-go-client",
+		HandshakeTimeout: 30 * time.Second,
+		PongWait:         60 * time.Second,
+		PingInterval:     25 * time.Second,
+		WriteWait:        10 * time.Second,
+		Logger: func(format string, args ...any) {
+			nc.log.Debug().Msgf(format, args...)
+		},
+	})
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer waitCancel()
+
+	nc.log.Info().Str("user_id", nc.meta.UserID).Msg("Waiting for websocket connection_id")
+	connectionID, err := waitForConnectionID(waitCtx, session, messages)
+	if err != nil {
+		_ = session.Close()
+		return nil, nil, "", fmt.Errorf("websocket connected but did not yield connection_id: %w", err)
+	}
+	if connectionID == "" {
+		_ = session.Close()
+		return nil, nil, "", fmt.Errorf("websocket yielded empty connection_id")
+	}
+
+	return session, messages, connectionID, nil
+}
+
+func (nc *NomadtableClient) handleWebsocketMessages(ctx context.Context, wsCtx context.Context, session *nomadtable.WebsocketSession, messages <-chan nomadtable.WebsocketMessage) {
+	for {
+		select {
+		case <-wsCtx.Done():
+			_ = session.Close()
+			return
+		case err := <-session.Err():
+			nc.log.Err(err).Msg("Websocket error")
+			return
+		case <-session.Done():
+			nc.log.Info().Msg("Websocket session done")
+			return
+		case msg := <-messages:
+			nc.log.Debug().
+				Time("received_at", msg.ReceivedAt).
+				Int("type", msg.Type).
+				Int("size", len(msg.Data)).
+				Msg("Received websocket message")
+
+			if msg.Type != 1 {
+				continue
+			}
+			if err := nc.handleWebsocketEvent(ctx, msg.Data); err != nil {
+				nc.log.Err(err).Msg("Failed to handle websocket event")
+			}
+		}
+	}
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -297,12 +353,7 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 	return nil
 }
 
-func (nc *NomadtableClient) loadRooms(ctx context.Context) {
-	if nc.session == nil {
-		nc.log.Error().Msg("loadRooms called without websocket session")
-		return
-	}
-	connectionID := nc.session.ConnectionID()
+func (nc *NomadtableClient) loadRooms(ctx context.Context, connectionID string) {
 	if connectionID == "" {
 		nc.log.Error().Msg("loadRooms called without connection_id")
 		return

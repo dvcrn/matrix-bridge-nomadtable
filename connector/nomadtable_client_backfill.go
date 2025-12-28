@@ -17,6 +17,11 @@ var _ bridgev2.BackfillingNetworkAPI = (*NomadtableClient)(nil)
 
 // FetchMessages implements [bridgev2.BackfillingNetworkAPI].
 func (nc *NomadtableClient) FetchMessages(ctx context.Context, fetchParams bridgev2.FetchMessagesParams) (*bridgev2.FetchMessagesResponse, error) {
+	fmt.Println("----------")
+	fmt.Println("----------")
+	fmt.Println("----------")
+	fmt.Println("----------")
+	fmt.Println("---------- Backfill called")
 	portal := fetchParams.Portal
 	log := nc.log.With().
 		Str("portal_id", string(portal.ID)).
@@ -78,17 +83,9 @@ func (nc *NomadtableClient) FetchMessages(ctx context.Context, fetchParams bridg
 
 	// Backfill batches should be chronological.
 	batch := msgs
-	if fetchParams.Forward {
-		// Forward backfill isn't meaningful without pagination support.
-		// Return empty set to avoid spamming.
-		batch = nil
-		limit = 0
-	} else {
-		// Take most recent 'limit' messages.
-		batch = msgs
-		if len(batch) > limit {
-			batch = batch[len(batch)-limit:]
-		}
+	// Without pagination, return the most recent messages for both directions.
+	if len(batch) > limit {
+		batch = batch[len(batch)-limit:]
 	}
 
 	out := make([]*bridgev2.BackfillMessage, 0, len(batch))

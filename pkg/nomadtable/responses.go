@@ -119,6 +119,7 @@ type Channel struct {
 	Hidden          bool           `json:"hidden"`
 	Blocked         bool           `json:"blocked"`
 	Name            string         `json:"name"`
+	Image           string         `json:"image,omitempty"`
 	PlanID          string         `json:"plan_id,omitempty"`
 	ActivityEmoji   string         `json:"activityEmoji,omitempty"`
 }
