@@ -87,6 +87,11 @@ type QueryMembersResponse struct {
 	Duration string           `json:"duration"`
 }
 
+type SendMessageResponse struct {
+	Message  *Message `json:"message"`
+	Duration string   `json:"duration"`
+}
+
 type ChannelState struct {
 	Channel        *Channel         `json:"channel"`
 	Messages       []*Message       `json:"messages"`
@@ -163,6 +168,7 @@ type Message struct {
 	HTML                 string                    `json:"html"`
 	Type                 string                    `json:"type"`
 	User                 *UserResponse             `json:"user"`
+	Member               *ChannelMember            `json:"member,omitempty"`
 	Attachments          []*Attachment             `json:"attachments"`
 	LatestReactions      []*Reaction               `json:"latest_reactions"`
 	OwnReactions         []*Reaction               `json:"own_reactions"`

@@ -144,6 +144,34 @@ func (c *Client) QueryChannel(ctx context.Context, channelType, channelID, userI
 	return &result, nil
 }
 
+type SendMessageRequest struct {
+	Message *MessageInput `json:"message"`
+}
+
+type MessageInput struct {
+	ID             string        `json:"id,omitempty"`
+	Text           string        `json:"text,omitempty"`
+	Attachments    []*Attachment `json:"attachments"`
+	MentionedUsers []string      `json:"mentioned_users"`
+	ParentID       string        `json:"parent_id,omitempty"`
+	ShowInChannel  bool          `json:"show_in_channel,omitempty"`
+}
+
+func (c *Client) SendMessage(ctx context.Context, channelType, channelID, userID, connectionID string, request *SendMessageRequest) (*SendMessageResponse, error) {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	q.Set("connection_id", connectionID)
+
+	path := fmt.Sprintf("/channels/%s/%s/message", channelType, channelID)
+
+	var result SendMessageResponse
+	if err := c.do(ctx, http.MethodPost, path, q, request, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, body any, result any) error {
 	u := c.BaseURL + path
 
