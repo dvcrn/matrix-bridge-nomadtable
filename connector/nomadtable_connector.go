@@ -3,17 +3,12 @@ package connector
 import (
 	"context"
 	"fmt"
-	"math/rand"
-	"time"
 
 	"github.com/dvcrn/matrix-bridge-nomadtable/pkg/nomadtable"
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/configupgrade"
-	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
-	"maunium.net/go/mautrix/bridgev2/networkid"
-	"maunium.net/go/mautrix/event"
 )
 
 // Ensure MyConnector implements NetworkConnector.
@@ -65,6 +60,7 @@ func (c *NomadtableConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabili
 // GetDBMetaTypes implements bridgev2.NetworkConnector.
 func (c *NomadtableConnector) GetDBMetaTypes() database.MetaTypes {
 	return database.MetaTypes{
+		Message:   func() any { return &NomadtableMessageMetadata{} },
 		UserLogin: func() any { return &LoginMetadata{} },
 	}
 }
@@ -144,87 +140,5 @@ func (c *NomadtableConnector) LoadUserLogin(ctx context.Context, login *bridgev2
 		Interface("client_type", client).
 		Msg("Created and stored NomadtableClient")
 
-	go c.createWelcomeRoomAndSendIntro(login)
-
 	return nil
-}
-
-// createWelcomeRoomAndSendIntro performs the room creation and ghost interaction logic.
-func (c *NomadtableConnector) createWelcomeRoomAndSendIntro(login *bridgev2.UserLogin) {
-	ctx := context.Background()
-	user := login.User
-	log := c.log.With().Str("user_mxid", string(user.MXID)).Str("login_id", string(login.ID)).Logger()
-	ctx = log.WithContext(ctx)
-
-	rand.Seed(time.Now().UnixNano())
-
-	log.Info().Msg("Starting welcome room creation process")
-
-	portalID := networkid.PortalID("welcome-room")
-	portalKey := networkid.PortalKey{ID: portalID}
-
-	portal, err := c.bridge.GetPortalByKey(ctx, portalKey)
-	if err != nil {
-		log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to get portal")
-		return
-	}
-
-	log.Info().Str("portal_id", string(portal.ID)).Msg("Successfully retrieved portal")
-
-	ghostNetworkUserID := networkid.UserID(fmt.Sprintf("%s_ghosty_ghost", c.GetNetworkID()))
-	ghostDisplayName := "Ghosty Ghost"
-
-	ghost, err := c.bridge.GetGhostByID(ctx, ghostNetworkUserID)
-	if err != nil {
-		log.Err(err).Str("ghost_network_user_id", string(ghostNetworkUserID)).Msg("Failed to get ghost")
-		return
-	}
-
-	ghostInfo := &bridgev2.UserInfo{Name: &ghostDisplayName}
-	ghost.UpdateInfo(ctx, ghostInfo)
-
-	log = log.With().Str("ghost_mxid", string(ghost.ID)).Logger()
-	log.Info().Msg("Successfully retrieved/provisioned ghost")
-
-	err = portal.CreateMatrixRoom(ctx, user.GetDefaultLogin(), &bridgev2.ChatInfo{
-		Name:  ptr.Ptr(fmt.Sprintf("Welcome %s!", login.RemoteName)),
-		Topic: ptr.Ptr("Your special welcome room."),
-		Members: &bridgev2.ChatMemberList{Members: []bridgev2.ChatMember{{
-			EventSender: bridgev2.EventSender{
-				Sender:      networkid.UserID(user.MXID),
-				SenderLogin: networkid.UserLoginID(user.GetDefaultLogin().ID),
-			},
-			Membership: event.MembershipJoin,
-			Nickname:   ptr.Ptr(login.RemoteName),
-			PowerLevel: ptr.Ptr(100),
-			UserInfo:   &bridgev2.UserInfo{Name: ptr.Ptr(login.RemoteName)},
-		}}},
-	})
-	if err != nil {
-		log.Err(err).Msg("Failed to create matrix room")
-		return
-	}
-	log.Info().Msg("Successfully created matrix room")
-
-	err = ghost.Intent.EnsureJoined(ctx, portal.MXID)
-	if err != nil {
-		log.Err(err).Msg("Failed to ensure ghost was joined before sending message")
-		return
-	}
-
-	greetings := []string{"Hello there!", "Welcome!", "Greetings!", "Hi!", "Hey!"}
-	randomGreeting := greetings[rand.Intn(len(greetings))]
-	messageContent := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    fmt.Sprintf("%s I'm %s, your friendly welcome bot for the %s bridge.", randomGreeting, ghostDisplayName, c.GetName().DisplayName),
-	}
-
-	content := &event.Content{Parsed: messageContent}
-
-	_, err = ghost.Intent.SendMessage(ctx, portal.MXID, event.EventMessage, content, nil)
-	if err != nil {
-		log.Err(err).Msg("Failed to send welcome message from ghost")
-		return
-	}
-	log.Info().Msg("Successfully sent welcome message from ghost")
 }

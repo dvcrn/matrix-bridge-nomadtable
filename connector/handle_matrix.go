@@ -29,10 +29,72 @@ func (nc *NomadtableClient) HandleMatrixMessage(ctx context.Context, msg *bridge
 		return nil, nil
 	}
 
-	// Placeholder: demonstrate Remote -> Matrix flow by echoing a message.
-	nc.QueueRemoteMessage(ctx, msg.Portal.ID, "Hi there too")
+	if msg.Content == nil {
+		log.Debug().Msg("Ignoring Matrix message with nil content")
+		return nil, nil
+	}
+	if msg.Content.MsgType != event.MsgText && msg.Content.MsgType != event.MsgNotice && msg.Content.MsgType != event.MsgEmote {
+		log.Debug().Str("msgtype", string(msg.Content.MsgType)).Msg("Ignoring unsupported Matrix msgtype")
+		return nil, nil
+	}
 
-	return &bridgev2.MatrixMessageResponse{}, nil
+	body := msg.Content.Body
+	if body == "" {
+		log.Debug().Msg("Ignoring empty Matrix message")
+		return nil, nil
+	}
+
+	if nc.session == nil {
+		return nil, fmt.Errorf("no websocket session")
+	}
+	connectionID := nc.session.ConnectionID()
+	if connectionID == "" {
+		return nil, fmt.Errorf("missing connection_id")
+	}
+
+	channelType, channelID, err := parsePortalKeyToChannel(msg.Portal.PortalKey.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	preview := body
+	if len(preview) > 200 {
+		preview = preview[:200] + "…"
+	}
+	log.Info().
+		Str("channel_type", channelType).
+		Str("channel_id", channelID).
+		Str("connection_id", connectionID).
+		Str("user_id", nc.meta.UserID).
+		Int("len", len(body)).
+		Str("text", preview).
+		Msg("Sending Matrix message to Nomadtable")
+
+	resp, err := nc.client.SendMessage(ctx, channelType, channelID, nc.meta.UserID, connectionID, &nomadtable.SendMessageRequest{
+		Message: &nomadtable.MessageInput{
+			Text: body,
+		},
+	})
+	if err != nil {
+		log.Err(err).Msg("SendMessage failed")
+		return nil, err
+	}
+
+	remoteID := ""
+	if resp != nil && resp.Message != nil {
+		remoteID = resp.Message.ID
+	}
+	log.Info().
+		Str("remote_message_id", remoteID).
+		Bool("has_message", resp != nil && resp.Message != nil).
+		Msg("SendMessage completed")
+
+	if remoteID == "" {
+		log.Warn().Msg("SendMessage succeeded but response had no message ID")
+		return &bridgev2.MatrixMessageResponse{DB: &database.Message{ID: networkid.MessageID("unknown")}}, nil
+	}
+
+	return &bridgev2.MatrixMessageResponse{DB: &database.Message{ID: networkid.MessageID(remoteID)}}, nil
 }
 
 // GetUserInfo is not implemented for this simple connector.
