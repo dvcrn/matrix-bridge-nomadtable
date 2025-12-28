@@ -605,11 +605,20 @@ func (nc *NomadtableClient) loadRooms(ctx context.Context, connectionID string) 
 			chatInfo.Type = &rt
 		}
 
-		latestTS := time.Now()
-		if ch.UpdatedAt != nil {
+		latestTS := time.Time{}
+		if ch.UpdatedAt != nil && ch.UpdatedAt.After(latestTS) {
 			latestTS = *ch.UpdatedAt
-		} else if ch.LastMessageAt != nil {
+		}
+		if ch.LastMessageAt != nil && ch.LastMessageAt.After(latestTS) {
 			latestTS = *ch.LastMessageAt
+		}
+		for _, msg := range state.Messages {
+			if msg != nil && msg.CreatedAt != nil && msg.CreatedAt.After(latestTS) {
+				latestTS = *msg.CreatedAt
+			}
+		}
+		if latestTS.IsZero() {
+			latestTS = time.Now()
 		}
 
 		nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatResync{
