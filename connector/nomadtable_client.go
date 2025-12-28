@@ -17,10 +17,17 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 // Ensure NomadtableClient implements NetworkAPI.
 var _ bridgev2.NetworkAPI = (*NomadtableClient)(nil)
+
+const (
+	nobodyPowerLevel  = 100
+	defaultPowerLevel = 0
+)
 
 // NomadtableClient implements the bridgev2.NetworkAPI for interacting
 // with Nomadtable on behalf of a specific user login.
@@ -357,13 +364,356 @@ func (nc *NomadtableClient) handleWebsocketEvent(ctx context.Context, data []byt
 			return fmt.Errorf("unmarshal message_new: %w", err)
 		}
 		return nc.handleRemoteMessage(ctx, &ev)
+	case "message.read":
+		var ev nomadtable.MessageReadEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal message.read: %w", err)
+		}
+		return nc.handleReadEvent(ctx, &ev)
+	case "typing.start":
+		var ev nomadtable.TypingStartEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal typing.start: %w", err)
+		}
+		return nc.handleTypingEvent(ctx, ev.CID, ev.ChannelType, ev.ChannelID, ev.User, ev.CreatedAt, true)
+	case "typing.stop":
+		var ev nomadtable.TypingStopEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal typing.stop: %w", err)
+		}
+		return nc.handleTypingEvent(ctx, ev.CID, ev.ChannelType, ev.ChannelID, ev.User, ev.CreatedAt, false)
+	case "channel.kicked":
+		var ev nomadtable.ChannelKickedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal channel.kicked: %w", err)
+		}
+		return nc.handleChannelKicked(ctx, &ev)
 	case "notification.added_to_channel":
-		nc.log.Info().Str("cid", base.CID).Msg("Added to channel, triggering portal resync")
-		nc.triggerResync(ctx, "added_to_channel")
-		return nil
+		var ev nomadtable.NotificationAddedToChannel
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("unmarshal notification.added_to_channel: %w", err)
+		}
+		return nc.handleAddedToChannel(ctx, &ev)
 	default:
 		return nil
 	}
+}
+
+func (nc *NomadtableClient) resolvePortalKey(cid, channelType, channelID string) (networkid.PortalKey, error) {
+	if cid == "" && channelType != "" && channelID != "" {
+		cid = fmt.Sprintf("%s:%s", channelType, channelID)
+	}
+	if cid == "" {
+		return networkid.PortalKey{}, fmt.Errorf("missing cid in event")
+	}
+	return networkid.PortalKey{ID: networkid.PortalID(cid)}, nil
+}
+
+func (nc *NomadtableClient) resolveEventSender(ctx context.Context, user *nomadtable.UserResponse) (bridgev2.EventSender, bool) {
+	if user == nil || user.ID == "" {
+		return bridgev2.EventSender{}, false
+	}
+	remoteID := networkid.UserID(user.ID)
+	return bridgev2.EventSender{
+		Sender:   remoteID,
+		IsFromMe: nc.IsThisUser(ctx, remoteID),
+	}, true
+}
+
+func (nc *NomadtableClient) getExistingPortal(ctx context.Context, portalKey networkid.PortalKey) (*bridgev2.Portal, error) {
+	portal, err := nc.bridge.GetExistingPortalByKey(ctx, portalKey)
+	if err != nil {
+		return nil, err
+	}
+	if portal == nil || portal.MXID == "" {
+		return nil, nil
+	}
+	return portal, nil
+}
+
+func (nc *NomadtableClient) isMatrixRoomLocked(ctx context.Context, mxid id.RoomID) (bool, error) {
+	if nc.bridge == nil || nc.bridge.Matrix == nil {
+		return false, fmt.Errorf("matrix connector is nil")
+	}
+	powerLevels, err := nc.bridge.Matrix.GetPowerLevels(ctx, mxid)
+	if err != nil {
+		return false, fmt.Errorf("get power levels: %w", err)
+	}
+	if powerLevels == nil {
+		return false, fmt.Errorf("power levels are nil")
+	}
+	msgLevel := nobodyPowerLevel
+	if pl, ok := powerLevels.Events[event.EventMessage.String()]; ok {
+		msgLevel = pl
+	} else {
+		msgLevel = powerLevels.EventsDefault
+	}
+	return msgLevel >= nobodyPowerLevel, nil
+}
+
+func (nc *NomadtableClient) queueRoomReadOnly(portal *bridgev2.Portal, ts time.Time) error {
+	if portal == nil {
+		return fmt.Errorf("portal is nil")
+	}
+	if nc.login == nil {
+		return fmt.Errorf("user login is nil")
+	}
+
+	powerLevelChanges := &bridgev2.PowerLevelOverrides{
+		UsersDefault:  ptr.Ptr(defaultPowerLevel),
+		EventsDefault: ptr.Ptr(nobodyPowerLevel),
+		StateDefault:  ptr.Ptr(nobodyPowerLevel),
+		Ban:           ptr.Ptr(nobodyPowerLevel),
+		Kick:          ptr.Ptr(nobodyPowerLevel),
+		Invite:        ptr.Ptr(nobodyPowerLevel),
+		Events: map[event.Type]int{
+			event.EventMessage:     nobodyPowerLevel,
+			event.StateRoomName:    nobodyPowerLevel,
+			event.StateRoomAvatar:  nobodyPowerLevel,
+			event.StateTopic:       nobodyPowerLevel,
+			event.StatePowerLevels: nobodyPowerLevel,
+			event.EventReaction:    nobodyPowerLevel,
+			event.EventRedaction:   nobodyPowerLevel,
+		},
+	}
+
+	nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatInfoChange{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatInfoChange,
+			PortalKey: portal.PortalKey,
+			Timestamp: ts,
+		},
+		ChatInfoChange: &bridgev2.ChatInfoChange{
+			MemberChanges: &bridgev2.ChatMemberList{
+				PowerLevels: powerLevelChanges,
+			},
+		},
+	})
+	return nil
+}
+
+func (nc *NomadtableClient) queueRoomWritable(portal *bridgev2.Portal, ts time.Time) error {
+	if portal == nil {
+		return fmt.Errorf("portal is nil")
+	}
+	if nc.login == nil {
+		return fmt.Errorf("user login is nil")
+	}
+
+	powerLevelChanges := &bridgev2.PowerLevelOverrides{
+		UsersDefault:  ptr.Ptr(defaultPowerLevel),
+		EventsDefault: ptr.Ptr(defaultPowerLevel),
+		StateDefault:  ptr.Ptr(50),
+		Ban:           ptr.Ptr(50),
+		Kick:          ptr.Ptr(50),
+		Invite:        ptr.Ptr(50),
+		Events: map[event.Type]int{
+			event.EventMessage:     defaultPowerLevel,
+			event.StateRoomName:    50,
+			event.StateRoomAvatar:  50,
+			event.StateTopic:       50,
+			event.StatePowerLevels: 50,
+			event.EventReaction:    defaultPowerLevel,
+			event.EventRedaction:   defaultPowerLevel,
+		},
+	}
+
+	nc.bridge.QueueRemoteEvent(nc.login, &simplevent.ChatInfoChange{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatInfoChange,
+			PortalKey: portal.PortalKey,
+			Timestamp: ts,
+		},
+		ChatInfoChange: &bridgev2.ChatInfoChange{
+			MemberChanges: &bridgev2.ChatMemberList{
+				PowerLevels: powerLevelChanges,
+			},
+		},
+	})
+	return nil
+}
+
+func (nc *NomadtableClient) handleReadEvent(ctx context.Context, ev *nomadtable.MessageReadEvent) error {
+	if ev == nil {
+		return nil
+	}
+
+	nc.cacheUser(ev.User)
+
+	portalKey, err := nc.resolvePortalKey(ev.CID, ev.ChannelType, ev.ChannelID)
+	if err != nil {
+		nc.log.Warn().Err(err).Msg("Skipping message.read event without cid")
+		return nil
+	}
+
+	sender, ok := nc.resolveEventSender(ctx, ev.User)
+	if !ok {
+		nc.log.Warn().Msg("Skipping message.read event without user id")
+		return nil
+	}
+
+	ts := time.Now()
+	readUpTo := time.Time{}
+	if ev.CreatedAt != nil {
+		ts = *ev.CreatedAt
+		readUpTo = *ev.CreatedAt
+	}
+
+	receipt := &simplevent.Receipt{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventReadReceipt,
+			PortalKey: portalKey,
+			Sender:    sender,
+			Timestamp: ts,
+			LogContext: func(c zerolog.Context) zerolog.Context {
+				return c.Str("last_read_message_id", ev.LastReadMessageID)
+			},
+		},
+		ReadUpTo: readUpTo,
+	}
+	if ev.LastReadMessageID != "" {
+		receipt.LastTarget = networkid.MessageID(ev.LastReadMessageID)
+	}
+
+	nc.bridge.QueueRemoteEvent(nc.login, receipt)
+	return nil
+}
+
+func (nc *NomadtableClient) handleChannelKicked(ctx context.Context, ev *nomadtable.ChannelKickedEvent) error {
+	if ev == nil {
+		return nil
+	}
+
+	portalKey, err := nc.resolvePortalKey(ev.CID, ev.ChannelType, ev.ChannelID)
+	if err != nil {
+		nc.log.Warn().Err(err).Msg("Skipping channel.kicked event without cid")
+		return nil
+	}
+
+	portal, err := nc.getExistingPortal(ctx, portalKey)
+	if err != nil {
+		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to load portal for channel.kicked")
+		return nil
+	}
+	if portal == nil {
+		nc.log.Debug().Str("portal_key", string(portalKey.ID)).Msg("Portal not found for channel.kicked")
+		return nil
+	}
+
+	ts := time.Now()
+	if ev.CreatedAt != nil {
+		ts = *ev.CreatedAt
+	}
+
+	content := &event.MessageEventContent{
+		MsgType: event.MsgNotice,
+		Body:    "You have left this channel",
+	}
+	if _, err := nc.bridge.Bot.SendMessage(ctx, portal.MXID, event.EventMessage, &event.Content{Parsed: content}, nil); err != nil {
+		nc.log.Err(err).Str("room_id", portal.MXID.String()).Msg("Failed to send channel.kicked notice")
+	}
+
+	if err := nc.queueRoomReadOnly(portal, ts); err != nil {
+		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to queue read-only update")
+	}
+
+	return nil
+}
+
+func (nc *NomadtableClient) handleAddedToChannel(ctx context.Context, ev *nomadtable.NotificationAddedToChannel) error {
+	if ev == nil {
+		return nil
+	}
+
+	if ev.Channel != nil {
+		nc.cacheUser(ev.Channel.CreatedBy)
+	}
+	if ev.Member != nil {
+		nc.cacheUser(ev.Member.User)
+	}
+
+	portalKey, err := nc.resolvePortalKey(ev.CID, ev.ChannelType, ev.ChannelID)
+	if err != nil {
+		nc.log.Warn().Err(err).Msg("Skipping notification.added_to_channel event without cid")
+		return nil
+	}
+
+	portal, err := nc.getExistingPortal(ctx, portalKey)
+	if err != nil {
+		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to load portal for added_to_channel")
+		return nil
+	}
+	if portal == nil {
+		nc.log.Debug().Str("portal_key", string(portalKey.ID)).Msg("Portal not found for added_to_channel")
+		return nil
+	}
+
+	locked, err := nc.isMatrixRoomLocked(ctx, portal.MXID)
+	if err != nil {
+		nc.log.Err(err).Str("room_id", portal.MXID.String()).Msg("Failed to check room lock state")
+		return nil
+	}
+	if !locked {
+		return nil
+	}
+
+	ts := time.Now()
+	if ev.CreatedAt != nil {
+		ts = *ev.CreatedAt
+	}
+
+	if err := nc.queueRoomWritable(portal, ts); err != nil {
+		nc.log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to queue room unlock")
+	}
+
+	return nil
+}
+
+func (nc *NomadtableClient) handleTypingEvent(
+	ctx context.Context,
+	cid string,
+	channelType string,
+	channelID string,
+	user *nomadtable.UserResponse,
+	createdAt *time.Time,
+	isTyping bool,
+) error {
+	nc.cacheUser(user)
+
+	portalKey, err := nc.resolvePortalKey(cid, channelType, channelID)
+	if err != nil {
+		nc.log.Warn().Err(err).Msg("Skipping typing event without cid")
+		return nil
+	}
+
+	sender, ok := nc.resolveEventSender(ctx, user)
+	if !ok {
+		nc.log.Warn().Msg("Skipping typing event without user id")
+		return nil
+	}
+
+	ts := time.Now()
+	if createdAt != nil {
+		ts = *createdAt
+	}
+
+	timeout := time.Duration(0)
+	if isTyping {
+		timeout = 10 * time.Second
+	}
+
+	nc.bridge.QueueRemoteEvent(nc.login, &simplevent.Typing{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventTyping,
+			PortalKey: portalKey,
+			Sender:    sender,
+			Timestamp: ts,
+		},
+		Timeout: timeout,
+		Type:    bridgev2.TypingTypeText,
+	})
+
+	return nil
 }
 
 func (nc *NomadtableClient) triggerResync(ctx context.Context, reason string) {

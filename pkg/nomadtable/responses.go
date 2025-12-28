@@ -92,6 +92,11 @@ type SendMessageResponse struct {
 	Duration string   `json:"duration"`
 }
 
+type MarkReadResponse struct {
+	Event    *MessageReadEvent `json:"event"`
+	Duration string            `json:"duration"`
+}
+
 type ChannelState struct {
 	Channel        *Channel         `json:"channel"`
 	Messages       []*Message       `json:"messages"`

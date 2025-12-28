@@ -172,6 +172,21 @@ func (c *Client) SendMessage(ctx context.Context, channelType, channelID, userID
 	return &result, nil
 }
 
+func (c *Client) MarkRead(ctx context.Context, channelType, channelID, userID, connectionID string) (*MarkReadResponse, error) {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	q.Set("connection_id", connectionID)
+
+	path := fmt.Sprintf("/channels/%s/%s/read", channelType, channelID)
+
+	var result MarkReadResponse
+	if err := c.do(ctx, http.MethodPost, path, q, map[string]any{}, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, body any, result any) error {
 	u := c.BaseURL + path
 
