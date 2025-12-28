@@ -170,8 +170,9 @@ func (nc *NomadtableClient) GetChatInfo(ctx context.Context, portal *bridgev2.Po
 	}
 
 	chatInfo := &bridgev2.ChatInfo{
-		Name:  ptr.Ptr(name),
-		Topic: ptr.Ptr(topic),
+		Name:   ptr.Ptr(name),
+		Topic:  ptr.Ptr(topic),
+		Avatar: nc.getAvatar(ch.Image),
 	}
 
 	if ch.MemberCount == 2 {
@@ -202,7 +203,10 @@ func (nc *NomadtableClient) GetChatInfo(ctx context.Context, portal *bridgev2.Po
 			members = append(members, bridgev2.ChatMember{
 				EventSender: bridgev2.EventSender{Sender: remoteID},
 				Membership:  event.MembershipJoin,
-				UserInfo:    &bridgev2.UserInfo{Name: ptr.Ptr(display)},
+				UserInfo: &bridgev2.UserInfo{
+					Name:   ptr.Ptr(display),
+					Avatar: nc.getAvatar(m.User.ProfileImage),
+				},
 			})
 		}
 

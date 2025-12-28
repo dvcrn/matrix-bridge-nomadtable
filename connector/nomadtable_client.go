@@ -34,6 +34,56 @@ type NomadtableClient struct {
 
 	wsCancel context.CancelFunc
 	session  *nomadtable.WebsocketSession
+
+	avatarCacheMu sync.Mutex
+	avatarCache   map[string]*bridgev2.Avatar
+}
+
+func (nc *NomadtableClient) getAvatar(url string) *bridgev2.Avatar {
+	if url == "" {
+		return nil
+	}
+
+	nc.avatarCacheMu.Lock()
+	if nc.avatarCache == nil {
+		nc.avatarCache = make(map[string]*bridgev2.Avatar)
+	}
+	if cached, ok := nc.avatarCache[url]; ok {
+		nc.avatarCacheMu.Unlock()
+		return cached
+	}
+	nc.avatarCacheMu.Unlock()
+
+	log := nc.log.With().Str("avatar_url", url).Logger()
+	avatar := &bridgev2.Avatar{
+		ID: networkid.AvatarID(url),
+		Get: func(ctx context.Context) ([]byte, error) {
+			log.Debug().Msg("Fetching avatar")
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return nil, fmt.Errorf("create avatar request: %w", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("fetch avatar: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode >= 400 {
+				return nil, fmt.Errorf("fetch avatar: unexpected status %d", resp.StatusCode)
+			}
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("read avatar body: %w", err)
+			}
+			return data, nil
+		},
+	}
+
+	nc.avatarCacheMu.Lock()
+	nc.avatarCache[url] = avatar
+	nc.avatarCacheMu.Unlock()
+
+	return avatar
 }
 
 // Connect starts the websocket connection.
@@ -299,8 +349,9 @@ func (nc *NomadtableClient) handleRemoteMessage(ctx context.Context, ev *nomadta
 		}
 
 		chatInfo := &bridgev2.ChatInfo{
-			Name:  ptr.Ptr(name),
-			Topic: ptr.Ptr(topic),
+			Name:   ptr.Ptr(name),
+			Topic:  ptr.Ptr(topic),
+			Avatar: nc.getAvatar(ev.Channel.Image),
 		}
 
 		memberCount := ev.ChannelMemberCount
@@ -453,8 +504,9 @@ func (nc *NomadtableClient) loadRooms(ctx context.Context, connectionID string) 
 		}
 
 		chatInfo := &bridgev2.ChatInfo{
-			Name:  ptr.Ptr(name),
-			Topic: ptr.Ptr(topic),
+			Name:   ptr.Ptr(name),
+			Topic:  ptr.Ptr(topic),
+			Avatar: nc.getAvatar(ch.Image),
 		}
 
 		if ch.MemberCount == 2 {
