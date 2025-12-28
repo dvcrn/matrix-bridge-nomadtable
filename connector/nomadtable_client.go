@@ -16,6 +16,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
+	"maunium.net/go/mautrix/bridgev2/status"
 )
 
 // Ensure NomadtableClient implements NetworkAPI.
@@ -177,9 +178,15 @@ func (nc *NomadtableClient) runWebsocketLoop(ctx context.Context, wsCtx context.
 			return
 		}
 
+		nc.sendBridgeState(status.BridgeState{StateEvent: status.StateConnecting})
+
 		session, messages, connectionID, err := nc.connectWebsocket(wsCtx)
 		if err != nil {
+			if wsCtx.Err() != nil {
+				return
+			}
 			nc.log.Err(err).Msg("Failed to connect websocket")
+			nc.sendTransientDisconnect("nomadtable_ws_connect_failed", err)
 			if !sleepWithContext(wsCtx, reconnectDelay) {
 				return
 			}
@@ -187,6 +194,7 @@ func (nc *NomadtableClient) runWebsocketLoop(ctx context.Context, wsCtx context.
 		}
 
 		nc.session = session
+		nc.sendBridgeState(status.BridgeState{StateEvent: status.StateConnected})
 
 		if firstConnect {
 			nc.log.Info().Str("connection_id", connectionID).Msg("Websocket connection_id ready")
@@ -255,10 +263,22 @@ func (nc *NomadtableClient) handleWebsocketMessages(ctx context.Context, wsCtx c
 			_ = session.Close()
 			return
 		case err := <-session.Err():
-			nc.log.Err(err).Msg("Websocket error")
+			if wsCtx.Err() != nil {
+				return
+			}
+			if err != nil {
+				nc.log.Err(err).Msg("Websocket error")
+			} else {
+				nc.log.Warn().Msg("Websocket error channel closed")
+			}
+			nc.sendTransientDisconnect("nomadtable_ws_error", err)
 			return
 		case <-session.Done():
+			if wsCtx.Err() != nil {
+				return
+			}
 			nc.log.Info().Msg("Websocket session done")
+			nc.sendTransientDisconnect("nomadtable_ws_closed", nil)
 			return
 		case msg := <-messages:
 			nc.log.Debug().
@@ -287,6 +307,26 @@ func sleepWithContext(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+func (nc *NomadtableClient) sendBridgeState(state status.BridgeState) {
+	if nc.login == nil || nc.login.BridgeState == nil {
+		return
+	}
+	nc.login.BridgeState.Send(state)
+}
+
+func (nc *NomadtableClient) sendTransientDisconnect(code status.BridgeStateErrorCode, err error) {
+	state := status.BridgeState{
+		StateEvent: status.StateTransientDisconnect,
+		Error:      code,
+	}
+	if err != nil {
+		state.Info = map[string]any{
+			"error": err.Error(),
+		}
+	}
+	nc.sendBridgeState(state)
 }
 
 func (nc *NomadtableClient) handleWebsocketEvent(ctx context.Context, data []byte) error {

@@ -87,7 +87,8 @@ func (sl *SimpleLogin) SubmitUserInput(ctx context.Context, input map[string]str
 		ID:         loginID,
 		RemoteName: userID,
 		RemoteProfile: status.RemoteProfile{
-			Name: userID,
+			Name:     userID,
+			Username: userID,
 		},
 		Metadata: &LoginMetadata{
 			UserID:    userID,

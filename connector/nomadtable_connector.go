@@ -121,6 +121,27 @@ func (c *NomadtableConnector) LoadUserLogin(ctx context.Context, login *bridgev2
 		return fmt.Errorf("invalid login metadata type")
 	}
 
+	updatedProfile := false
+	if login.RemoteName == "" && meta.UserID != "" {
+		login.RemoteName = meta.UserID
+		updatedProfile = true
+	}
+	if login.RemoteProfile.Name == "" && meta.UserID != "" {
+		login.RemoteProfile.Name = login.RemoteName
+		updatedProfile = true
+	}
+	if login.RemoteProfile.Username == "" && meta.UserID != "" {
+		login.RemoteProfile.Username = meta.UserID
+		updatedProfile = true
+	}
+	if updatedProfile {
+		if err := login.Save(ctx); err != nil {
+			c.log.Err(err).
+				Str("user_login_id", string(login.ID)).
+				Msg("Failed to update user login profile")
+		}
+	}
+
 	nc := nomadtable.NewClient(meta.APIKey, meta.AuthToken)
 
 	client := &NomadtableClient{

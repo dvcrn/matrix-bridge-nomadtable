@@ -29,6 +29,21 @@ func (nc *NomadtableClient) HandleMatrixMessage(ctx context.Context, msg *bridge
 		return nil, nil
 	}
 
+	if msg.Event.ID != "" {
+		existing, err := nc.bridge.DB.Message.GetPartByMXID(ctx, msg.Event.ID)
+		if err != nil {
+			log.Err(err).Msg("Failed to check message database for MXID")
+		} else if existing != nil {
+			log.Info().
+				Str("existing_message_id", string(existing.ID)).
+				Msg("Ignoring Matrix message already bridged from remote")
+			return &bridgev2.MatrixMessageResponse{
+				DB:      &database.Message{ID: existing.ID},
+				Pending: true,
+			}, nil
+		}
+	}
+
 	if msg.Content == nil {
 		log.Debug().Msg("Ignoring Matrix message with nil content")
 		return nil, nil
