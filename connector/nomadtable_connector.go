@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/dvcrn/matrix-bridge-nomadtable/pkg/nomadtable"
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/ptr"
@@ -63,21 +64,23 @@ func (c *NomadtableConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabili
 
 // GetDBMetaTypes implements bridgev2.NetworkConnector.
 func (c *NomadtableConnector) GetDBMetaTypes() database.MetaTypes {
-	return database.MetaTypes{}
+	return database.MetaTypes{
+		UserLogin: func() any { return &LoginMetadata{} },
+	}
 }
 
 // GetLoginFlows implements bridgev2.NetworkConnector.
 func (c *NomadtableConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{{
-		ID:          LoginFlowIDUsernamePassword,
-		Name:        "Username & Password",
-		Description: "Log in using a username and password (no actual validation).",
+		ID:          LoginFlowIDAuth,
+		Name:        "User ID & Auth Token",
+		Description: "Log in using a User ID, API Key, and Auth Token.",
 	}}
 }
 
 // CreateLogin implements bridgev2.NetworkConnector.
 func (c *NomadtableConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
-	if flowID != LoginFlowIDUsernamePassword {
+	if flowID != LoginFlowIDAuth {
 		return nil, fmt.Errorf("unsupported login flow ID: %s", flowID)
 	}
 	return &SimpleLogin{
@@ -117,11 +120,20 @@ func (c *NomadtableConnector) LoadUserLogin(ctx context.Context, login *bridgev2
 		Str("mxid", string(login.User.MXID)).
 		Msg("LoadUserLogin called")
 
+	meta, ok := login.Metadata.(*LoginMetadata)
+	if !ok {
+		return fmt.Errorf("invalid login metadata type")
+	}
+
+	nc := nomadtable.NewClient(meta.APIKey, meta.AuthToken)
+
 	client := &NomadtableClient{
 		log:       c.log.With().Str("user_id", string(login.ID)).Logger(),
 		bridge:    c.bridge,
 		login:     login,
 		connector: c,
+		meta:      meta,
+		client:    nc,
 	}
 
 	login.Client = client
@@ -130,7 +142,7 @@ func (c *NomadtableConnector) LoadUserLogin(ctx context.Context, login *bridgev2
 		Str("user_id", string(login.ID)).
 		Str("remote_name", login.RemoteName).
 		Interface("client_type", client).
-		Msg("Created and stored MyNetworkClient")
+		Msg("Created and stored NomadtableClient")
 
 	go c.createWelcomeRoomAndSendIntro(login)
 
