@@ -2,6 +2,14 @@
 
 A Matrix bridge that connects Matrix to Nomadtable (a Stream Chat-based service) using the mautrix-go bridgev2 framework.
 
+## Setup
+
+Generate config.yaml, generate registration, start the bridge
+
+**Caveats**:
+
+- Login is not implemented yet, so you'll need your own userid, api_key and authorization token. Capture it with Proxyman or Squid
+
 ## Building and Running
 
 ### Build the Bridge
